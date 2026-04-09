@@ -785,10 +785,8 @@ document.getElementById('days-left').textContent = daysLeft;
 
 function authorizeStrava() {
   const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=activity:read_all,read`;
-  window.open(authUrl, '_blank', 'width=600,height=700');
-  document.getElementById('copy-link-area').style.display = 'block';
-  document.getElementById('step1').className = 'step done';
-  document.getElementById('step2').className = 'step active';
+  window.location.href = authUrl; return;
+
 }
 
 function processCallback() {
@@ -1226,7 +1224,6 @@ window.addEventListener('load', () => {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
   if (code) {
-    document.getElementById('step1').className = 'step done';
     document.getElementById('step2').className = 'step done';
     document.getElementById('step3').className = 'step active';
     exchangeToken(code);
