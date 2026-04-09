@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XCO ANALYZER PRO</title>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow:ital,wght@1,700;1,900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --racing-red: #ff3e3e;
+            --dark-bg: #0a0a0a;
+            --panel-bg: #161616;
+        }
+
+        body {
+            background-color: var(--dark-bg);
+            color: white;
+            font-family: 'Barlow', sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container { width: 100%; max-width: 600px; }
+
+        /* Título Estilo Racing */
+        .header-title {
+            font-family: 'Archivo Black', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: -2px;
+            font-style: italic;
+            font-size: 3rem;
+            line-height: 0.9;
+            margin-bottom: 5px;
+        }
+
+        .header-title span { color: var(--racing-red); }
+
+        .race-info {
+            font-weight: 900;
+            font-style: italic;
+            text-transform: uppercase;
+            color: #888;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background-color: var(--panel-bg);
+            padding: 20px;
+            border-left: 4px solid var(--racing-red);
+            margin-bottom: 20px;
+        }
+
+        h3 {
+            color: var(--racing-red);
+            text-transform: uppercase;
+            font-style: italic;
+            margin-top: 0;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            background: #222;
+            border: 1px solid #444;
+            color: #00ff00;
+            font-family: monospace;
+            margin: 10px 0;
+            box-sizing: border-box;
+        }
+
+        button, .btn-auth {
+            display: inline-block;
+            background: var(--racing-red);
+            color: white;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-style: italic;
+            padding: 15px 24px;
+            border: none;
+            clip-path: polygon(5% 0, 100% 0, 95% 100%, 0 100%);
+            transition: transform 0.2s ease;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        button:hover, .btn-auth:hover {
+            transform: scale(1.02) skewX(-2deg);
+            filter: brightness(1.2);
+        }
+
+        #error-msg {
+            color: var(--racing-red);
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header-title">XCO<span>ANALYZER</span></div>
+    <div class="race-info">17 días para la carrera · 44km XCO</div>
+
+    <div class="card" id="step1">
+        <h3>PASO 1 - CONECTAR CON STRAVA</h3>
+        <p>Autoriza la aplicación para leer tus entrenamientos.</p>
+        <a href="https://www.strava.com/oauth/authorize?client_id=125553&redirect_uri=https://jorms-fa.github.io/App-de-entrenamiento/&response_type=code&scope=activity:read_all" class="btn-auth">Conectar con Strava</a>
+    </div>
+
+    <div class="card" id="step2">
+        <h3>PASO 2 - PEGA LA URL DE RETORNO AQUÍ</h3>
+        <p>Después de autorizar, serás redirigido. Copia la URL completa de tu navegador y pégala abajo:</p>
+        
+        <input type="text" id="callbackUrl" placeholder="https://jorms-fa.github.io/App-de-entrenamiento/?state=&code=...">
+        <button onclick="procesarCallback()">Procesar y continuar →</button>
+        <div id="error-msg"></div>
+    </div>
+
+    <div class="card" id="results" style="display: none;">
+        <h3>Datos de Entrenamiento</h3>
+        <pre id="data-output" style="color: white; white-space: pre-wrap; font-family: monospace;"></pre>
+    </div>
+</div>
+
+<script>
+    // LÓGICA ORIGINAL INTACTA
+    const clientId = '125553';
+    const clientSecret = 'd65e9b94de9c1d636cc684bd3d1b82d00135eb52'; 
+
+    function procesarCallback() {
+        const urlStr = document.getElementById('callbackUrl').value.trim();
+        const errorMsg = document.getElementById('error-msg');
+        errorMsg.textContent = '';
+
+        if (!urlStr) {
+            errorMsg.textContent = 'Por favor, pega la URL.';
+            return;
+        }
+
+        try {
+            const url = new URL(urlStr);
+            const code = url.searchParams.get('code');
+
+            if (!code) {
+                errorMsg.textContent = 'No se encontró el parámetro "code" en la URL.';
+                return;
+            }
+
+            // Intercambiar código por token
+            obtenerToken(code);
+
+        } catch (e) {
+            errorMsg.textContent = 'URL inválida.';
+        }
+    }
+
+    function obtenerToken(code) {
+        const tokenUrl = 'https://www.strava.com/api/v3/oauth/token';
+        const errorMsg = document.getElementById('error-msg');
+        
+        const payload = {
+            client_id: clientId,
+            client_secret: clientSecret,
+            code: code,
+            grant_type: 'authorization_code'
+        };
+
+        fetch(tokenUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Error en la autenticación: ' + response.statusText);
+            }
+            return response.json();
+        })
+        .then(data => {
+            const accessToken = data.access_token;
+            obtenerActividades(accessToken);
+        })
+        .catch(error => {
+            errorMsg.textContent = error.message;
+        });
+    }
+
+    function obtenerActividades(accessToken) {
+        const activitiesUrl = 'https://www.strava.com/api/v3/athlete/activities?per_page=30';
+        const errorMsg = document.getElementById('error-msg');
+
+        fetch(activitiesUrl, {
+            headers: {
+                'Authorization': 'Bearer ' + accessToken
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Error al obtener actividades: ' + response.statusText);
+            }
+            return response.json();
+        })
+        .then(data => {
+            document.getElementById('step1').style.display = 'none';
+            document.getElementById('step2').style.display = 'none';
+            document.getElementById('results').style.display = 'block';
+            
+            // Mostrar los datos crudos para que puedas copiarlos
+            document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
+        })
+        .catch(error => {
+            errorMsg.textContent = error.message;
+        });
+    }
+</script>
+
+</body>
+</html>
