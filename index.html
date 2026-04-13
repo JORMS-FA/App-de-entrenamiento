@@ -842,14 +842,17 @@ async function exchangeToken(code) {
 async function loadActivities(token, athlete) {
   setStep('ls2', 'active');
 
-  const fourWeeksAgo = Math.floor((Date.now() - 28 * 24 * 60 * 60 * 1000) / 1000);
-  
+  const weeksToFetch = parseInt(document.getElementById('weeks-input')?.value, 10) || 4;
+  const startDate = new Date();
+  startDate.setHours(0,0,0,0);
+  startDate.setDate(startDate.getDate() - (weeksToFetch * 7) + 1);
+
   try {
     // Fetch multiple pages
     let allActivities = [];
     for (let page = 1; page <= 3; page++) {
       const res = await fetch(
-        `https://www.strava.com/api/v3/athlete/activities?after=${fourWeeksAgo}&per_page=50&page=${page}`,
+        `https://www.strava.com/api/v3/athlete/activities?after=${startDate}&per_page=50&page=${page}`,
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
       const batch = await res.json();
