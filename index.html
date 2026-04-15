@@ -690,6 +690,16 @@
       Conecta con Strava para analizar tus últimas 4 semanas y generar tu plan de peak performance para el 26 de abril.
     </p>
 
+    <div style="display:flex; gap:1rem; align-items:flex-end; margin-bottom:2rem; max-width:600px;">
+      <div style="flex:1;">
+        <div class="input-label">Cargar actividades desde:</div>
+        <input class="input-field" id="filter-from-date" type="date" />
+        <div style="font-family:'DM Mono',monospace; font-size:0.6rem; color:var(--muted); margin-top:0.25rem;">
+          Default: Últimas 4 semanas
+        </div>
+      </div>
+    </div>
+
     <div class="step-indicator">
       <div class="step active" id="step1"><div class="step-num">1</div> Autorizar Strava</div>
       <div class="step" id="step2"><div class="step-num">2</div> Obtener token</div>
@@ -754,9 +764,25 @@
       <div id="activities-list"></div>
     </div>
 
+    <!-- CALENDAR -->
+    <div class="panel fade-in" style="margin-bottom:3rem;">
+      <div class="panel-title">Calendario de Actividades</div>
+      <div id="calendar-container"></div>
+    </div>
+
     <!-- AI INSIGHT -->
     <div class="insight-box fade-in" id="ai-insight-box">
       <div class="insight-text" id="ai-insight-text">Analizando tu forma con IA...</div>
+    </div>
+
+    <!-- EXPORT SECTION -->
+    <div style="margin-bottom:3rem; display:flex; gap:1rem; justify-content:flex-end;">
+      <button class="small-btn" onclick="exportDataAsJSON('all')" style="border:1px solid var(--orange); color:var(--orange); background: rgba(252,76,2,0.1);">
+        📥 Descargar datos (todos)
+      </button>
+      <button class="small-btn" onclick="exportDataAsJSON('current')" style="border:1px solid var(--border);">
+        📥 Descargar datos (actuales)
+      </button>
     </div>
 
     <!-- TRAINING PLAN -->
@@ -783,7 +809,169 @@ const today = new Date();
 const daysLeft = Math.ceil((raceDate - today) / (1000 * 60 * 60 * 24));
 document.getElementById('days-left').textContent = daysLeft;
 
+// ============================================
+// UTILIDADES: Categorización + localStorage
+// ============================================
+
+// Mapeo de sport_type de Strava a categorías
+const DEFAULT_SPORT_MAP = {
+  'Ride': 'Cycling',
+  'MountainBikeRide': 'Cycling',
+  'VirtualRide': 'Cycling',
+  'Run': 'Running',
+  'TrailRun': 'Running',
+  'VirtualRun': 'Running',
+  'Swim': 'Swimming',
+  'Workout': 'Gym',
+  'Strength': 'Gym',
+  'WeightTraining': 'Gym',
+  'Yoga': 'Gym',
+  'Pilates': 'Gym',
+};
+
+function getSportCategoryMap() {
+  const stored = localStorage.getItem('xco_sport_map');
+  return stored ? JSON.parse(stored) : DEFAULT_SPORT_MAP;
+}
+
+function setSportCategoryMap(map) {
+  localStorage.setItem('xco_sport_map', JSON.stringify(map));
+}
+
+function categorizeActivity(activity) {
+  const sportMap = getSportCategoryMap();
+  const sportType = activity.sport_type || activity.type || 'Other';
+  return sportMap[sportType] || 'Other';
+}
+
+function getFilterPrefs() {
+  const stored = localStorage.getItem('xco_filter_prefs');
+  if (!stored) {
+    const defaults = {
+      lastFilterDate: Math.floor((Date.now() - 28 * 24 * 60 * 60 * 1000) / 1000),
+      calendarView: 'suffer', // 'distance', 'time', 'suffer'
+      calendarCategoryFilter: 'All'
+    };
+    setFilterPrefs(defaults);
+    return defaults;
+  }
+  return JSON.parse(stored);
+}
+
+function setFilterPrefs(prefs) {
+  localStorage.setItem('xco_filter_prefs', JSON.stringify(prefs));
+}
+
+// ============================================
+// EXPORTACIÓN DE DATOS (IA-Ready)
+// ============================================
+
+function buildExportJSON(activities, stats, athlete, includeFiltered = true) {
+  const now = new Date();
+  const sportMap = getSportCategoryMap();
+  
+  // Definición de zonas HR
+  const hrZoneDefinitions = {
+    z1: { name: 'Z1 Recovery', threshold: '< 131 bpm', percentage: '< 60% max HR' },
+    z2: { name: 'Z2 Aerobic', threshold: '131-147 bpm', percentage: '60-70% max HR' },
+    z3: { name: 'Z3 Tempo', threshold: '148-159 bpm', percentage: '70-80% max HR' },
+    z4: { name: 'Z4 Threshold', threshold: '160-173 bpm', percentage: '80-90% max HR' },
+    z5: { name: 'Z5 VO2Max', threshold: '> 174 bpm', percentage: '> 90% max HR' }
+  };
+
+  // Agrupar actividades por categoría
+  const activitiesByCategory = {};
+  activities.forEach(a => {
+    if (!activitiesByCategory[a.category]) {
+      activitiesByCategory[a.category] = [];
+    }
+    activitiesByCategory[a.category].push({
+      id: a.id,
+      name: a.name,
+      date: a.date.toISOString().split('T')[0],
+      type: a.type,
+      category: a.category,
+      metrics: {
+        distance_km: parseFloat(a.distance),
+        moving_time_minutes: Math.round(a.movingTime / 60),
+        elevation_gain_m: Math.round(a.elevGain || 0),
+        avg_heart_rate_bpm: Math.round(a.avgHR),
+        max_heart_rate_bpm: a.maxHR,
+        suffer_score: Math.round(a.sufferScore || 0),
+        estimated_zone: a.estimatedZone,
+        avg_speed_kmh: parseFloat(a.avgSpeed)
+      }
+    });
+  });
+
+  const exportData = {
+    export_metadata: {
+      generated_at: now.toISOString(),
+      athlete_name: athlete ? athlete.firstname + ' ' + athlete.lastname : 'Unknown',
+      data_period: {
+        date_from: activities.length > 0 ? activities[activities.length - 1].date.toISOString().split('T')[0] : 'N/A',
+        date_to: activities.length > 0 ? activities[0].date.toISOString().split('T')[0] : 'N/A',
+        total_activities: activities.length
+      }
+    },
+    
+    aggregated_stats: {
+      total_km: parseFloat(stats.totalDist),
+      total_moving_hours: (stats.totalTime / 3600).toFixed(1),
+      total_elevation_gain_m: parseInt(stats.totalElev),
+      average_heart_rate_bpm: stats.avgHR,
+      total_suffer_score: parseInt(stats.totalSuffer),
+      heart_rate_zone_distribution_percent: {
+        z1_recovery: stats.zonePct[0] + '%',
+        z2_aerobic: stats.zonePct[1] + '%',
+        z3_tempo: stats.zonePct[2] + '%',
+        z4_threshold: stats.zonePct[3] + '%',
+        z5_vo2max: stats.zonePct[4] + '%'
+      }
+    },
+
+    activities_by_category: activitiesByCategory,
+
+    sport_type_mapping: sportMap,
+
+    heart_rate_zone_definitions: hrZoneDefinitions,
+
+    configuration: {
+      last_updated: now.toISOString(),
+      export_version: '1.0'
+    }
+  };
+
+  return exportData;
+}
+
+function downloadJSON(data, filename = null) {
+  if (!filename) {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    filename = `xco-training-export-${dateStr}.json`;
+  }
+  
+  const jsonString = JSON.stringify(data, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function authorizeStrava() {
+  // Save selected date filter before redirecting
+  const dateInput = document.getElementById('filter-from-date');
+  if (dateInput && dateInput.value) {
+    localStorage.setItem('xco_filter_from_date', dateInput.value);
+  }
+  
   const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=activity:read_all,read`;
   window.location.href = authUrl; return;
 
@@ -833,31 +1021,43 @@ async function exchangeToken(code) {
     if (!data.access_token) throw new Error(data.message || 'Token exchange failed');
 
     setStep('ls1', 'done');
-    await loadActivities(data.access_token, data.athlete);
+    
+    // Get stored date filter
+    const fromDateStr = localStorage.getItem('xco_filter_from_date');
+    const fromDate = fromDateStr ? new Date(fromDateStr) : new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
+    
+    await loadActivities(data.access_token, data.athlete, fromDate);
   } catch(err) {
     showError('Error de autenticación: ' + err.message);
   }
 }
 
-async function loadActivities(token, athlete) {
+async function loadActivities(token, athlete, fromDate = null) {
   setStep('ls2', 'active');
 
-  const weeksToFetch = parseInt(document.getElementById('weeks-input')?.value, 10) || 4;
-  const startDate = new Date();
-  startDate.setHours(0,0,0,0);
-  startDate.setDate(startDate.getDate() - (weeksToFetch * 7) + 1);
-
+  // Calculate "after" timestamp from date filter
+  let afterTimestamp;
+  if (fromDate instanceof Date) {
+    afterTimestamp = Math.floor(fromDate.getTime() / 1000);
+  } else {
+    afterTimestamp = Math.floor((Date.now() - 28 * 24 * 60 * 60 * 1000) / 1000);
+  }
+  
   try {
     // Fetch multiple pages
     let allActivities = [];
     for (let page = 1; page <= 3; page++) {
       const res = await fetch(
-        `https://www.strava.com/api/v3/athlete/activities?after=${startDate}&per_page=50&page=${page}`,
+        `https://www.strava.com/api/v3/athlete/activities?after=${afterTimestamp}&per_page=50&page=${page}`,
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
       const batch = await res.json();
       if (!Array.isArray(batch) || batch.length === 0) break;
       allActivities = allActivities.concat(batch);
+    }
+
+    if (allActivities.length < 3) {
+      console.warn('⚠️ Pocas actividades cargadas (' + allActivities.length + '). Considera expandir el rango de fechas.');
     }
 
     setStep('ls2', 'done');
@@ -884,7 +1084,7 @@ async function loadActivities(token, athlete) {
 
 function processActivities(activities) {
   return activities
-    .filter(a => a.sport_type === 'Ride' || a.sport_type === 'MountainBikeRide' || a.sport_type === 'VirtualRide' || a.type === 'Ride')
+    .filter(a => a.sport_type || a.type) // Accept all activity types
     .map(a => {
       const maxHR = a.max_heartrate || 185;
       const avgHR = a.average_heartrate || 0;
@@ -914,6 +1114,7 @@ function processActivities(activities) {
         relativeEffort: a.weighted_average_watts ? Math.round(a.weighted_average_watts) : null,
         estimatedZone,
         type: a.sport_type || a.type,
+        category: categorizeActivity(a),
         kudos: a.kudos_count
       };
     })
@@ -966,7 +1167,214 @@ function computeStats(activities) {
   };
 }
 
+// ============================================
+// CALENDARIO DINÁMICO
+// ============================================
+
+function buildCalendarData(activities) {
+  if (activities.length === 0) {
+    return {
+      dateMin: null,
+      dateMax: null,
+      yearMonth: null,
+      dailyActivities: {}
+    };
+  }
+
+  // Find min and max dates
+  const dates = activities.map(a => new Date(a.date));
+  const dateMin = new Date(Math.min(...dates));
+  const dateMax = new Date(Math.max(...dates));
+  
+  // Extract year-month for display
+  const year = dateMax.getFullYear();
+  const month = String(dateMax.getMonth() + 1).padStart(2, '0');
+  const yearMonth = `${year}-${month}`;
+
+  // Group activities by date
+  const dailyActivities = {};
+  activities.forEach(a => {
+    const dateStr = a.date.toISOString().split('T')[0];
+    if (!dailyActivities[dateStr]) {
+      dailyActivities[dateStr] = [];
+    }
+    dailyActivities[dateStr].push(a);
+  });
+
+  // Fill in all days between min and max with empty arrays
+  const allDays = {};
+  for (let d = new Date(dateMin); d <= dateMax; d.setDate(d.getDate() + 1)) {
+    const dayStr = d.toISOString().split('T')[0];
+    allDays[dayStr] = dailyActivities[dayStr] || null;
+  }
+
+  return {
+    dateMin,
+    dateMax,
+    yearMonth,
+    dailyActivities: allDays
+  };
+}
+
+function getColorByIntensity(value, metric) {
+  // Normalize value to 0-100 scale for coloring
+  let normalized = 0;
+  
+  if (metric === 'distance') {
+    // Max 100km
+    normalized = Math.min((parseFloat(value) / 100) * 100, 100);
+  } else if (metric === 'time') {
+    // Max 6 hours (360 min)
+    normalized = Math.min((value / 360) * 100, 100);
+  } else if (metric === 'suffer') {
+    // Max 300 suffer score
+    normalized = Math.min((parseInt(value) / 300) * 100, 100);
+  }
+
+  // Color scale: gray->green->yellow->orange->red
+  if (normalized === 0) return 'rgba(100,100,100,0.2)';
+  if (normalized < 25) return 'rgba(0,204,102,0.15)';
+  if (normalized < 50) return 'rgba(255,215,0,0.15)';
+  if (normalized < 75) return 'rgba(255,136,0,0.2)';
+  return 'rgba(255,68,68,0.2)';
+}
+
+function renderCalendar(calendarData, viewMode = 'suffer', categoryFilter = 'All') {
+  const container = document.getElementById('calendar-container');
+  if (!container || !calendarData.dailyActivities || Object.keys(calendarData.dailyActivities).length === 0) {
+    return;
+  }
+
+  const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  
+  const monthDisplay = `${monthNames[calendarData.dateMin.getMonth()]} ${calendarData.dateMin.getFullYear()}`;
+  
+  let html = `
+    <div style="margin-bottom:1rem;">
+      <div style="font-family:'Bebas Neue',cursive; font-size:1.2rem; letter-spacing:0.05em; margin-bottom:1rem;">${monthDisplay}</div>
+      
+      <div style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="small-btn calendar-view-btn" data-mode="distance" style="border:1px solid var(--border);">📏 Distancia</button>
+        <button class="small-btn calendar-view-btn" data-mode="time" style="border:1px solid var(--border);">⏱ Tiempo</button>
+        <button class="small-btn calendar-view-btn active" data-mode="suffer" style="border:1px solid var(--orange); color:var(--orange); background: rgba(252,76,2,0.1);">💪 Esfuerzo</button>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--border); border:1px solid var(--border); margin-bottom:2rem;">
+  `;
+
+  // Header days
+  dayNames.forEach(day => {
+    html += `<div style="background:var(--card); padding:0.5rem; text-align:center; font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted); font-weight:600;">${day}</div>`;
+  });
+
+  // Calendar grid
+  const firstDay = calendarData.dateMin.getDay();
+  
+  // Empty cells before first day
+  for (let i = 0; i < firstDay; i++) {
+    html += `<div style="background:var(--card);"></div>`;
+  }
+
+  // Days with activities
+  Object.entries(calendarData.dailyActivities).forEach(([dateStr, activities]) => {
+    if (!activities || activities.length === 0) {
+      // Rest day
+      html += `
+        <div style="background:rgba(100,100,100,0.1); padding:0.5rem; min-height:80px; cursor:default; position:relative; overflow:hidden;">
+          <div style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted); margin-bottom:0.25rem;">${new Date(dateStr).getDate()}</div>
+          <div style="font-size:0.6rem; color:var(--muted); font-style:italic;">Descanso</div>
+        </div>
+      `;
+    } else {
+      // Filter by category if needed
+      let filtered = activities;
+      if (categoryFilter !== 'All') {
+        filtered = activities.filter(a => a.category === categoryFilter);
+      }
+
+      if (filtered.length === 0) {
+        html += `<div style="background:var(--card); padding:0.5rem; min-height:80px;"></div>`;
+        return;
+      }
+
+      // Calculate metric value
+      let metricValue = 0;
+      let metricDisplay = '';
+      
+      if (viewMode === 'distance') {
+        metricValue = filtered.reduce((s, a) => s + parseFloat(a.distance), 0);
+        metricDisplay = metricValue.toFixed(1) + ' km';
+      } else if (viewMode === 'time') {
+        metricValue = filtered.reduce((s, a) => s + a.movingTime, 0);
+        const hours = Math.floor(metricValue / 3600);
+        const mins = Math.floor((metricValue % 3600) / 60);
+        metricDisplay = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+      } else if (viewMode === 'suffer') {
+        metricValue = filtered.reduce((s, a) => s + (a.sufferScore || 0), 0);
+        metricDisplay = metricValue + ' pts';
+      }
+
+      const bgColor = getColorByIntensity(metricValue, viewMode);
+      const activityName = filtered[0].name.substring(0, 20);
+
+      html += `
+        <div style="background:${bgColor}; border:1px solid var(--border); padding:0.5rem; min-height:80px; cursor:pointer; position:relative; overflow:hidden; transition:all 0.2s;" class="calendar-cell" data-date="${dateStr}" data-count="${filtered.length}">
+          <div style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted); margin-bottom:0.25rem;">${new Date(dateStr).getDate()}</div>
+          <div style="font-size:0.7rem; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${activityName}</div>
+          <div style="font-family:'DM Mono',monospace; font-size:0.75rem; color:var(--orange); margin-top:0.4rem; font-weight:600;">${metricDisplay}</div>
+          ${filtered.length > 1 ? `<div style="font-family:'DM Mono',monospace; font-size:0.6rem; color:var(--muted); margin-top:0.25rem;">+${filtered.length - 1}</div>` : ''}
+        </div>
+      `;
+    }
+  });
+
+  html += `</div>`;
+  container.innerHTML = html;
+
+  // Add event listeners
+  document.querySelectorAll('.calendar-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.calendar-view-btn').forEach(b => {
+        b.style.borderColor = 'var(--border)';
+        b.style.color = 'var(--muted)';
+        b.style.background = 'transparent';
+      });
+      btn.style.borderColor = 'var(--orange)';
+      btn.style.color = 'var(--orange)';
+      btn.style.background = 'rgba(252,76,2,0.1)';
+      renderCalendar(calendarData, btn.dataset.mode, categoryFilter);
+    });
+  });
+
+  document.querySelectorAll('.calendar-cell').forEach(cell => {
+    cell.addEventListener('mouseenter', () => {
+      cell.style.opacity = '0.8';
+      cell.style.transform = 'scale(1.02)';
+    });
+    cell.addEventListener('mouseleave', () => {
+      cell.style.opacity = '1';
+      cell.style.transform = 'scale(1)';
+    });
+  });
+}
+
+// Global data storage for export
 let aiPlanData = null;
+let lastLoadedActivities = null;
+let lastLoadedStats = null;
+let lastLoadedAthlete = null;
+
+function exportDataAsJSON(scope = 'current') {
+  if (!lastLoadedActivities || !lastLoadedStats) {
+    alert('No hay datos cargados. Por favor, conecta con Strava primero.');
+    return;
+  }
+
+  const exportJSON = buildExportJSON(lastLoadedActivities, lastLoadedStats, lastLoadedAthlete, scope === 'current');
+  downloadJSON(exportJSON);
+}
 
 async function generateAIPlan(stats, activities, athlete) {
   const name = athlete ? athlete.firstname : 'atleta';
@@ -1081,6 +1489,11 @@ function generateFallbackPlan() {
 }
 
 function renderDashboard(stats, activities, athlete) {
+  // Store data globally for export
+  lastLoadedActivities = activities;
+  lastLoadedStats = stats;
+  lastLoadedAthlete = athlete;
+
   document.getElementById('loading-screen').style.display = 'none';
   document.getElementById('dashboard').style.display = 'block';
 
@@ -1201,6 +1614,10 @@ function renderDashboard(stats, activities, athlete) {
       </div>
     `).join('');
   }
+
+  // Render Calendar
+  const calendarData = buildCalendarData(activities);
+  renderCalendar(calendarData, 'suffer');
 }
 
 function showLoading() {
@@ -1223,6 +1640,19 @@ function showError(msg) {
 
 // Check if already have token from URL (auto-redirect case)
 window.addEventListener('load', () => {
+  // Initialize date filter with stored preference or default (28 days ago)
+  const dateInput = document.getElementById('filter-from-date');
+  if (dateInput) {
+    const prefs = getFilterPrefs();
+    const fromDate = new Date(prefs.lastFilterDate * 1000);
+    const defaultDate = new Date();
+    defaultDate.setDate(defaultDate.getDate() - 28);
+    
+    const storedDate = localStorage.getItem('xco_filter_from_date');
+    const dateToUse = storedDate ? new Date(storedDate) : defaultDate;
+    dateInput.valueAsDate = dateToUse;
+  }
+
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
   if (code) {
